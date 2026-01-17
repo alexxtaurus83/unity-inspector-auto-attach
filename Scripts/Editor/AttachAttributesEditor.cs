@@ -1,11 +1,11 @@
 using System;
 using System.Linq;
 using System.Text.RegularExpressions;
-using Nrjwolf.Tools.AttachAttributes;
+using Dev.Agred.Tools.AttachAttributes;
 using UnityEditor;
 using UnityEngine;
 
-namespace Nrjwolf.Tools.Editor.AttachAttributes
+namespace Dev.Agred.Tools.Editor.AttachAttributes
 {
     public static class AttachAttributesUtils
     {
@@ -20,7 +20,9 @@ namespace Nrjwolf.Tools.Editor.AttachAttributes
             set
             {
                 if (value) EditorPrefs.DeleteKey(k_EditorPrefsAttachAttributesGlobal);
-                else EditorPrefs.SetBool(k_EditorPrefsAttachAttributesGlobal, value); // clear value if it's equals defaultValue
+                else
+                    EditorPrefs.SetBool(k_EditorPrefsAttachAttributesGlobal,
+                        value); // clear value if it's equals defaultValue
             }
         }
 
@@ -49,7 +51,8 @@ namespace Nrjwolf.Tools.Editor.AttachAttributes
             return type;
         }
 
-        public static Type StringToType(this string aClassName) => System.AppDomain.CurrentDomain.GetAssemblies().SelectMany(x => x.GetTypes()).First(x => x.IsSubclassOf(typeof(Component)) && x.Name == aClassName);
+        public static Type StringToType(this string aClassName) => System.AppDomain.CurrentDomain.GetAssemblies()
+            .SelectMany(x => x.GetTypes()).First(x => x.IsSubclassOf(typeof(Component)) && x.Name == aClassName);
     }
 
     /// Base class for Attach Attribute
@@ -83,7 +86,7 @@ namespace Nrjwolf.Tools.Editor.AttachAttributes
             if (isPropertyValueNull)
             {
                 var type = property.GetPropertyType().StringToType();
-                var go = ((MonoBehaviour)(property.serializedObject.targetObject)).gameObject;
+                var go = ((MonoBehaviour) (property.serializedObject.targetObject)).gameObject;
                 UpdateProperty(property, go, type);
             }
 
@@ -118,7 +121,7 @@ namespace Nrjwolf.Tools.Editor.AttachAttributes
     {
         public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
         {
-            GetComponentInChildrenAttribute labelAttribute = (GetComponentInChildrenAttribute)attribute;
+            var labelAttribute = (GetComponentInChildrenAttribute) attribute;
             if (labelAttribute.ChildName == null)
             {
                 property.objectReferenceValue = go.GetComponentInChildren(type, labelAttribute.IncludeInactive);
@@ -126,13 +129,73 @@ namespace Nrjwolf.Tools.Editor.AttachAttributes
             else
             {
                 var child = go.transform.Find(labelAttribute.ChildName);
-                if (child != null)
+                if (child)
                 {
                     property.objectReferenceValue = child.GetComponent(type);
                 }
             }
         }
     }
+
+    /// GetComponentsInChildren
+    [CustomPropertyDrawer(typeof(GetComponentsInChildrenAttribute))]
+    public class GetComponentsInChildrenAttributeEditor : AttachAttributePropertyDrawer
+    {
+        public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
+        {
+            var labelAttribute = (GetComponentsInChildrenAttribute) attribute;
+            if (labelAttribute.PropertyName == null)
+            {
+                Debug.LogError("PropertyName parameter in GetComponentsInChildrenAttribute is required!");
+                return;
+            }
+
+            var arrayProperty = property.serializedObject.FindProperty(labelAttribute.PropertyName);
+            if (labelAttribute.ChildName == null)
+            {
+                UpdateArrayProperty(arrayProperty, go, type, labelAttribute.IncludeInactive);
+            }
+            else
+            {
+                var child = go.transform.Find(labelAttribute.ChildName);
+                if (!child)
+                    return;
+
+                UpdateArrayProperty(arrayProperty, child.gameObject, type, labelAttribute.IncludeInactive);
+            }
+        }
+
+        private static void UpdateArrayProperty(SerializedProperty property, GameObject go, Type type,
+            bool includeInactive)
+        {
+            var componentsInChildren = go.GetComponentsInChildren(type, includeInactive);
+            if (property.arraySize != componentsInChildren.Length)
+                property.ClearArray();
+
+            for (var i = 0; i < componentsInChildren.Length; i++)
+            {
+                var component = componentsInChildren[i];
+
+                var componentAlreadyInArray = false;
+                for (var j = 0; j < property.arraySize; j++)
+                {
+                    var arrayElement = property.GetArrayElementAtIndex(j);
+                    if (arrayElement != null && arrayElement.objectReferenceValue == component)
+                    {
+                        componentAlreadyInArray = true;
+                        break;
+                    }
+                }
+
+                if (componentAlreadyInArray)
+                    continue;
+
+                property.InsertArrayElementAtIndex(i);
+                property.GetArrayElementAtIndex(i).objectReferenceValue = component;
+            }
+        }
+    }
+
 
     /// AddComponent
     [CustomPropertyDrawer(typeof(AddComponentAttribute))]
@@ -155,29 +218,146 @@ namespace Nrjwolf.Tools.Editor.AttachAttributes
 
         public UnityEngine.Object FindObjectsOfTypeByName(string aClassName)
         {
+
+             var findOption = ((FindObjectOfTypeAttribute)attribute).IncludeInactive
+                ? FindObjectsInactive.Include
+                : FindObjectsInactive.Exclude;
+
             var assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
             for (int i = 0; i < assemblies.Length; i++)
             {
                 var types = assemblies[i].GetTypes();
                 for (int n = 0; n < types.Length; n++)
                 {
-                    if (typeof(UnityEngine.Object).IsAssignableFrom(types[n]) && aClassName == types[n].Name)
+                     if (typeof(UnityEngine.Object).IsAssignableFrom(types[n]) && aClassName == types[n].Name)
                         return UnityEngine.Object.FindObjectOfType(types[n]);
+                        return UnityEngine.Object.FindFirstObjectByType(types[n], findOption);
                 }
             }
+
             return new UnityEngine.Object();
         }
     }
 
     /// GetComponentInParent
-    [CustomPropertyDrawer(typeof(GetComponentInParent))]
+    [CustomPropertyDrawer(typeof(GetComponentInParentAttribute))]
     public class GetComponentInParentAttributeEditor : AttachAttributePropertyDrawer
     {
         public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
         {
-            if (go.transform.parent != null)
-                property.objectReferenceValue = go.transform.parent.gameObject.GetComponent(type);
+            if (go.transform.parent)
+                //property.objectReferenceValue = go.transform.parent.gameObject.GetComponent(type);
+                property.objectReferenceValue = go.transform.GetComponentInParent(type);
         }
     }
-    #endregion
+
+    /// GetComponentsInParent
+    [CustomPropertyDrawer(typeof(GetComponentsInParentAttribute))]
+    public class GetComponentsInParentAttributeEditor : AttachAttributePropertyDrawer
+    {
+        public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
+        {
+            if (!go.transform.parent)
+                return;
+
+            var labelAttribute = (GetComponentsInParentAttribute) attribute;
+            if (labelAttribute.PropertyName == null)
+            {
+                Debug.LogError("PropertyName parameter in GetComponentsInParentAttribute is required!");
+                return;
+            }
+
+            var arrayProperty = property.serializedObject.FindProperty(labelAttribute.PropertyName);
+            UpdateArrayProperty(arrayProperty, go, type);
+        }
+
+        private static void UpdateArrayProperty(SerializedProperty property, GameObject go, Type type)
+        {
+            var componentsInChildren = go.GetComponentsInChildren(type);
+            if (property.arraySize != componentsInChildren.Length)
+                property.ClearArray();
+
+            for (var i = 0; i < componentsInChildren.Length; i++)
+            {
+                var component = componentsInChildren[i];
+
+                var componentAlreadyInArray = false;
+                for (var j = 0; j < property.arraySize; j++)
+                {
+                    var arrayElement = property.GetArrayElementAtIndex(j);
+                    if (arrayElement != null && arrayElement.objectReferenceValue == component)
+                    {
+                        componentAlreadyInArray = true;
+                        break;
+                    }
+                }
+
+                if (componentAlreadyInArray)
+                    continue;
+
+                property.InsertArrayElementAtIndex(i);
+                property.GetArrayElementAtIndex(i).objectReferenceValue = component;
+            }
+        }
+        
+        /// GetPrefab
+        [CustomPropertyDrawer(typeof(GetPrefabAttribute))]
+        public class GetPrefabAttributeEditor : AttachAttributePropertyDrawer
+        {
+            public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
+            {
+                GetPrefabAttribute labelAttribute = (GetPrefabAttribute) attribute;
+                if (labelAttribute.Path != null)
+                {
+                    var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath(labelAttribute.Path, typeof(GameObject));
+                    if (!prefab)
+                        return;
+
+                    property.objectReferenceValue = prefab;
+                }
+            }
+        }        
+    }
+
+    [CustomPropertyDrawer(typeof(BaseCustomFetchAttribute), useForChildren: true)]
+    public class CustomFetchAttributeEditor : AttachAttributePropertyDrawer
+    {
+        public override void UpdateProperty(SerializedProperty property)
+        {
+            BaseCustomFetchAttribute fetchAttribute = (BaseCustomFetchAttribute)attribute;
+            var methodInfo = AttachAttributesUtils.GetFetchMethod(property, fetchAttribute);
+
+            if (methodInfo == null)
+            {
+                EditorGUILayout.HelpBox($"Unable to find method \"{fetchAttribute.CustomFuncName}\"; ensure the method is static that returns nothing and takes in a \"{nameof(SerializedProperty)}\" for the first parameter and \"{fetchAttribute.GetType().Name}\" as the second parameter.", MessageType.Error);
+            }
+            else
+            {
+                methodInfo.Invoke(null, new object[] { property, fetchAttribute });
+            }
+        }
+
+        public override bool ShouldUpdateProperty(SerializedProperty property)
+        {
+            BaseCustomFetchAttribute fetchAttribute = (BaseCustomFetchAttribute)attribute;
+            if (string.IsNullOrEmpty(fetchAttribute.CustomValidationFuncName))
+            {
+                return base.ShouldUpdateProperty(property);
+            }
+
+            var methodInfo = AttachAttributesUtils.GetFetchValidationMethod(property, fetchAttribute);
+            bool ret = false;
+
+            if (methodInfo == null)
+            {
+                EditorGUILayout.HelpBox($"Unable to find method \"{fetchAttribute.CustomValidationFuncName}\"; ensure the method is static that returns a boolean and takes in a \"{nameof(SerializedProperty)}\" for the first parameter and \"{fetchAttribute.GetType().Name}\" as the second parameter.", MessageType.Error);
+            }
+            else
+            {
+                ret = (bool)methodInfo.Invoke(null, new object[] { property, fetchAttribute });
+            }
+
+            return ret;
+        }
+    }
 }
