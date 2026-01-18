@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Dev.Agred.Tools.AttachAttributes;
 using UnityEditor;
@@ -51,10 +52,61 @@ namespace Dev.Agred.Tools.Editor.AttachAttributes
             return type;
         }
 
-        public static Type StringToType(this string aClassName) => System.AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(x => x.GetTypes()).First(x => x.IsSubclassOf(typeof(Component)) && x.Name == aClassName);
+        public static Type StringToType(this string aClassName)
+        {
+            try
+            {
+                return System.AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(x => x.GetTypes())
+                    .FirstOrDefault(x => x.IsSubclassOf(typeof(Component)) && x.Name == aClassName);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        
+        public static MethodInfo GetFetchMethod(SerializedProperty property, BaseCustomFetchAttribute fetchAttribute)
+        {
+            try
+            {
+                var targetObject = property.serializedObject.targetObject;
+                if (targetObject == null) return null;
+                
+                var targetType = targetObject.GetType();
+                if (targetType == null) return null;
+                
+                return targetType.GetMethod(fetchAttribute.CustomFuncName,
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new Type[] { typeof(SerializedProperty), fetchAttribute.GetType() }, null);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        
+        public static MethodInfo GetFetchValidationMethod(SerializedProperty property, BaseCustomFetchAttribute fetchAttribute)
+        {
+            try
+            {
+                var targetObject = property.serializedObject.targetObject;
+                if (targetObject == null) return null;
+                
+                var targetType = targetObject.GetType();
+                if (targetType == null) return null;
+                
+                return targetType.GetMethod(fetchAttribute.CustomValidationFuncName,
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new Type[] { typeof(SerializedProperty), fetchAttribute.GetType() }, null);
+            }
+            catch
+            {
+                return null;
+            }
+        }
     }
-
+    
     /// Base class for Attach Attribute
     public class AttachAttributePropertyDrawer : PropertyDrawer
     {
@@ -86,8 +138,15 @@ namespace Dev.Agred.Tools.Editor.AttachAttributes
             if (isPropertyValueNull)
             {
                 var type = property.GetPropertyType().StringToType();
-                var go = ((MonoBehaviour) (property.serializedObject.targetObject)).gameObject;
-                UpdateProperty(property, go, type);
+                if (type != null)
+                {
+                    var targetObj = property.serializedObject.targetObject;
+                    if (targetObj is MonoBehaviour monoBehaviour)
+                    {
+                        var go = monoBehaviour.gameObject;
+                        UpdateProperty(property, go, type);
+                    }
+                }
             }
 
             property.serializedObject.ApplyModifiedProperties();
@@ -218,7 +277,6 @@ namespace Dev.Agred.Tools.Editor.AttachAttributes
 
         public UnityEngine.Object FindObjectsOfTypeByName(string aClassName)
         {
-
              var findOption = ((FindObjectOfTypeAttribute)attribute).IncludeInactive
                 ? FindObjectsInactive.Include
                 : FindObjectsInactive.Exclude;
@@ -230,12 +288,11 @@ namespace Dev.Agred.Tools.Editor.AttachAttributes
                 for (int n = 0; n < types.Length; n++)
                 {
                      if (typeof(UnityEngine.Object).IsAssignableFrom(types[n]) && aClassName == types[n].Name)
-                        return UnityEngine.Object.FindObjectOfType(types[n]);
                         return UnityEngine.Object.FindFirstObjectByType(types[n], findOption);
                 }
             }
 
-            return new UnityEngine.Object();
+            return null;
         }
     }
 
@@ -299,30 +356,30 @@ namespace Dev.Agred.Tools.Editor.AttachAttributes
                 property.GetArrayElementAtIndex(i).objectReferenceValue = component;
             }
         }
-        
-        /// GetPrefab
-        [CustomPropertyDrawer(typeof(GetPrefabAttribute))]
-        public class GetPrefabAttributeEditor : AttachAttributePropertyDrawer
+    }
+    
+    /// GetPrefab
+    [CustomPropertyDrawer(typeof(GetPrefabAttribute))]
+    public class GetPrefabAttributeEditor : AttachAttributePropertyDrawer
+    {
+        public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
         {
-            public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
+            GetPrefabAttribute labelAttribute = (GetPrefabAttribute) attribute;
+            if (labelAttribute.Path != null)
             {
-                GetPrefabAttribute labelAttribute = (GetPrefabAttribute) attribute;
-                if (labelAttribute.Path != null)
-                {
-                    var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath(labelAttribute.Path, typeof(GameObject));
-                    if (!prefab)
-                        return;
+                var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath(labelAttribute.Path, typeof(GameObject));
+                if (!prefab)
+                    return;
 
-                    property.objectReferenceValue = prefab;
-                }
+                property.objectReferenceValue = prefab;
             }
-        }        
+        }
     }
 
     [CustomPropertyDrawer(typeof(BaseCustomFetchAttribute), useForChildren: true)]
     public class CustomFetchAttributeEditor : AttachAttributePropertyDrawer
     {
-        public override void UpdateProperty(SerializedProperty property)
+        public override void UpdateProperty(SerializedProperty property, GameObject go, Type type)
         {
             BaseCustomFetchAttribute fetchAttribute = (BaseCustomFetchAttribute)attribute;
             var methodInfo = AttachAttributesUtils.GetFetchMethod(property, fetchAttribute);
@@ -336,28 +393,7 @@ namespace Dev.Agred.Tools.Editor.AttachAttributes
                 methodInfo.Invoke(null, new object[] { property, fetchAttribute });
             }
         }
-
-        public override bool ShouldUpdateProperty(SerializedProperty property)
-        {
-            BaseCustomFetchAttribute fetchAttribute = (BaseCustomFetchAttribute)attribute;
-            if (string.IsNullOrEmpty(fetchAttribute.CustomValidationFuncName))
-            {
-                return base.ShouldUpdateProperty(property);
-            }
-
-            var methodInfo = AttachAttributesUtils.GetFetchValidationMethod(property, fetchAttribute);
-            bool ret = false;
-
-            if (methodInfo == null)
-            {
-                EditorGUILayout.HelpBox($"Unable to find method \"{fetchAttribute.CustomValidationFuncName}\"; ensure the method is static that returns a boolean and takes in a \"{nameof(SerializedProperty)}\" for the first parameter and \"{fetchAttribute.GetType().Name}\" as the second parameter.", MessageType.Error);
-            }
-            else
-            {
-                ret = (bool)methodInfo.Invoke(null, new object[] { property, fetchAttribute });
-            }
-
-            return ret;
-        }
+        
+        // Remove the ShouldUpdateProperty method since it doesn't exist in the base class
     }
 }

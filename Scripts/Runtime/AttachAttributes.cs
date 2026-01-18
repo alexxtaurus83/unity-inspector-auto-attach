@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using UnityEngine;
 
 namespace Dev.Agred.Tools.AttachAttributes
@@ -39,7 +40,7 @@ namespace Dev.Agred.Tools.AttachAttributes
 
         public bool IncludeInactive { get; set; }
         
-		public string ChildName { get; set; }
+		      public string ChildName { get; set; }
 
         public string PropertyName { get; set; }
     }
