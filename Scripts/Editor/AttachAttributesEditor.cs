@@ -118,7 +118,9 @@ namespace AttachAttributes {
             }
 
             if (drawerType != null) {
-                return (AttachAttributePropertyDrawer)System.Activator.CreateInstance(drawerType);
+                var drawer = (AttachAttributePropertyDrawer)System.Activator.CreateInstance(drawerType);
+                drawer.SetAttribute(attribute);  // Set the attribute after creation
+                return drawer;
             }
 
             return null;
@@ -419,9 +421,25 @@ namespace AttachAttributes {
         // Retry failed lookups after this interval (in seconds)
         private const double k_RetryInterval = 2.0;
 
+        // Allow external setting of the attribute for manual instantiation
+        protected AttachPropertyAttribute m_ExternalAttribute;
+
         // Generate unique cache key for a property
         private string GetCacheKey(SerializedProperty property) {
             return $"{property.propertyPath}_{property.serializedObject.targetObject.GetInstanceID()}";
+        }
+
+        /// Setter for external attribute assignment
+        public void SetAttribute(AttachPropertyAttribute attr) {
+            m_ExternalAttribute = attr;
+            UnityEngine.Debug.Log($"[AttachAttributes] Set external attribute: {attr?.GetType().Name ?? "null"}");
+        }
+
+        /// Getter that prioritizes external attribute if available, otherwise uses Unity's internal one
+        protected AttachPropertyAttribute GetEffectiveAttribute() {
+            var effectiveAttr = m_ExternalAttribute ?? (AttachPropertyAttribute)attribute;
+            UnityEngine.Debug.Log($"[AttachAttributes] Using attribute: {effectiveAttr?.GetType().Name ?? "null"} (external: {m_ExternalAttribute != null}, internal: {attribute != null})");
+            return effectiveAttr;
         }
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label) {
@@ -555,7 +573,7 @@ namespace AttachAttributes {
             var type = property.GetComponentType();
             var go = property.GetGameObject();
 
-            GetComponentInChildrenAttribute labelAttribute = (GetComponentInChildrenAttribute)attribute;
+            GetComponentInChildrenAttribute labelAttribute = (GetComponentInChildrenAttribute)GetEffectiveAttribute();
             GameObject targetObject = null;
             var targetName = labelAttribute.GameObjectName;
             if (string.IsNullOrEmpty(targetName)) {
@@ -585,7 +603,7 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
-            var labelAttribute = (GetComponentsInChildrenAttribute)attribute;
+            var labelAttribute = (GetComponentsInChildrenAttribute)GetEffectiveAttribute();
 
             if (!string.IsNullOrEmpty(labelAttribute.GameObjectName)) {
                 // Use custom name-based search instead of slow transform.Find()
@@ -684,7 +702,7 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
-            GetComponentInParentAttribute labelAttribute = (GetComponentInParentAttribute)attribute;
+            GetComponentInParentAttribute labelAttribute = (GetComponentInParentAttribute)GetEffectiveAttribute();
 
             GameObject targetObject = null;
             string targetName = labelAttribute.GameObjectName;
@@ -715,7 +733,7 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
-            var labelAttribute = (GetComponentsInParentAttribute)attribute;
+            var labelAttribute = (GetComponentsInParentAttribute)GetEffectiveAttribute();
 
             List<GameObject> targetObjects = new List<GameObject>();
 
@@ -745,7 +763,7 @@ namespace AttachAttributes {
     [CustomPropertyDrawer(typeof(GetPrefabAttribute))]
     public class GetPrefabAttributeEditor : AttachAttributePropertyDrawer {
         public override void UpdateProperty(SerializedProperty property) {
-            GetPrefabAttribute labelAttribute = (GetPrefabAttribute)attribute;
+            GetPrefabAttribute labelAttribute = (GetPrefabAttribute)GetEffectiveAttribute();
             if (labelAttribute.AssetPath != null) {
                 var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath(labelAttribute.AssetPath, typeof(GameObject));
                 if (!prefab)
@@ -764,7 +782,7 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
-            AddComponentAtParentAttribute labelAttribute = (AddComponentAtParentAttribute)attribute;
+            AddComponentAtParentAttribute labelAttribute = (AddComponentAtParentAttribute)GetEffectiveAttribute();
 
             Transform parentTransform = go.transform.parent;
             if (parentTransform == null)
@@ -830,7 +848,7 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
-            var labelAttribute = (GetComponentByPathAttribute)attribute;
+            var labelAttribute = (GetComponentByPathAttribute)GetEffectiveAttribute();
 
             GameObject targetObject = TransformPathHelper.FindGameObjectByPath(go, labelAttribute.path);
 
@@ -851,7 +869,7 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
-            var labelAttribute = (GetComponentsByPathAttribute)attribute;
+            var labelAttribute = (GetComponentsByPathAttribute)GetEffectiveAttribute();
 
             // Find all target GameObjects
             string fallbackPath = AttachAttributesUtils.GetFieldName(property);
