@@ -32,6 +32,7 @@ Alternatively, you can simply place the `Scripts` folder into your `Assets` fold
 
 ### `GetComponent`
 Automatically attaches a component from the same GameObject as the MonoBehavior script.
+**Note:** This attribute works inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -46,6 +47,7 @@ public class ExampleComponent : MonoBehaviour
 
 ### `GetComponentInChildren`
 Automatically attaches a component from a child GameObject. If a name is provided, it searches for a child GameObject with that name.
+**Note:** This attribute works inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -63,6 +65,7 @@ public class ExampleComponent : MonoBehaviour
 
 ### `GetComponentInParent`
 Automatically attaches a component from a parent GameObject. If a name is provided, it searches for a parent GameObject with that name.
+**Note:** This attribute works inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -80,6 +83,7 @@ public class ChildExample : MonoBehaviour
 
 ### `GetComponentByPath`
 Automatically attaches a component by specifying a path relative to the current GameObject. This attribute **only** performs a search if the path contains a `/`. If the path does not contain a `/`, the tool does nothing.
+**Note:** This attribute does NOT work inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -95,6 +99,7 @@ public class ExampleComponent : MonoBehaviour
 
 ### `GetComponentsInChildren`
 Populates an array or List with components from child GameObjects. If names are provided, it searches for children with those names.
+**Note:** This attribute works inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -117,6 +122,7 @@ public class ExampleComponent : MonoBehaviour
 
 ### `GetComponentsInParent`
 Populates an array or List with components from parent GameObjects.
+**Note:** This attribute works inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -134,6 +140,7 @@ public class ChildExample : MonoBehaviour
 
 ### `GetComponentsByPath`
 Populates an array or List with components found by specifying paths relative to the current GameObject. This attribute **only** performs a search if a path contains a `/`. If the path does not contain a `/`, the tool does nothing.
+**Note:** This attribute does NOT work inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -151,6 +158,7 @@ public class ExampleComponent : MonoBehaviour
 
 ### `AddComponent`
 Automatically adds a component to the same GameObject if it doesn't already exist and assigns it to the field.
+**Note:** This attribute does NOT work inside prefab assets.
 
 ```csharp
 using AttachAttributes;
@@ -165,6 +173,7 @@ public class ExampleComponent : MonoBehaviour
 
 ### `AddComponentAtParent`
 Automatically adds a component to the parent GameObject if it doesn't already exist and assigns it to the field.
+**Note:** This attribute does NOT work inside prefab assets.
 
 ```csharp
 using AttachAttributes;

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using UnityEditor;
+using UnityEditor.Callbacks;
 using UnityEngine;
 
 namespace AttachAttributes {
@@ -17,10 +18,7 @@ namespace AttachAttributes {
         public static bool IsEnabled {
             get => EditorPrefs.GetBool(k_EditorPrefsAttachAttributesGlobal, true);
             set {
-                if (value) EditorPrefs.DeleteKey(k_EditorPrefsAttachAttributesGlobal);
-                else
-                    EditorPrefs.SetBool(k_EditorPrefsAttachAttributesGlobal,
-                        value); // clear value if it's equals defaultValue
+                EditorPrefs.SetBool(k_EditorPrefsAttachAttributesGlobal, value);
             }
         }
 
@@ -59,8 +57,12 @@ namespace AttachAttributes {
                         // Find the appropriate PropertyDrawer for this attribute type
                         var propertyDrawer = GetPropertyDrawerForAttachAttribute(attachAttribute);
                         if (propertyDrawer != null) {
-                            // Call the UpdateProperty method directly to force reattachment
-                            propertyDrawer.UpdateProperty(iterator);
+                            // Call the ForceUpdate method directly to force reattachment
+                            if (propertyDrawer is AttachAttributePropertyDrawer attachDrawer) {
+                                attachDrawer.ForceUpdate(iterator);
+                            } else {
+                                propertyDrawer.UpdateProperty(iterator);
+                            }
                         }
                     }
                 }
@@ -412,12 +414,25 @@ namespace AttachAttributes {
 
     /// Base class for Attach Attribute
     public class AttachAttributePropertyDrawer : PropertyDrawer {
-        private Color m_GUIColorDefault = new Color(.6f, .6f, .6f, 1);
-        private Color m_GUIColorNull = new Color(1f, .5f, .5f, 1);
+        private Color m_GUIColorNull = new Color(1f, 0.5f, 0.5f, 1); // Red for not found
+        private Color m_GUIColorAssigned = new Color(0.5f, 1f, 0.5f, 1); // Green for auto-assigned
+        private Color m_GUIColorUserAssigned = new Color(1f, 1f, 0.5f, 1); // Yellow for user-assigned
+
+        // Enum to represent the state of an auto-attached field
+        private enum FieldState { NotFound, AutoAssigned, UserAssigned }
 
         // Instance-based cache to store failed lookups to avoid repeated expensive searches
         // Key: property cache key, Value: (timestamp when cached, bool indicating failure)
         private Dictionary<string, (double timestamp, bool failed)> m_FailedLookups = new Dictionary<string, (double timestamp, bool failed)>();
+        
+        // Instance-based cache to store the state of each property
+        // Key: property cache key, Value: FieldState
+        private Dictionary<string, FieldState> m_FieldStates = new Dictionary<string, FieldState>();
+        
+        // Instance-based cache to store the expected value after auto-assignment
+        // Key: property cache key, Value: Object (the expected value)
+        private Dictionary<string, UnityEngine.Object> m_ExpectedValues = new Dictionary<string, UnityEngine.Object>();
+
         // Retry failed lookups after this interval (in seconds)
         private const double k_RetryInterval = 2.0;
 
@@ -442,34 +457,132 @@ namespace AttachAttributes {
             return effectiveAttr;
         }
 
+        /// <summary>
+        /// Force update method that clears cached state and reattaches the property
+        /// </summary>
+        public void ForceUpdate(SerializedProperty property) {
+            // Clear cached states for this property to ensure fresh lookup
+            string cacheKey = GetCacheKey(property);
+            
+            if (m_FieldStates.ContainsKey(cacheKey)) {
+                m_FieldStates.Remove(cacheKey);
+            }
+            
+            if (m_ExpectedValues.ContainsKey(cacheKey)) {
+                m_ExpectedValues.Remove(cacheKey);
+            }
+            
+            if (m_FailedLookups.ContainsKey(cacheKey)) {
+                m_FailedLookups.Remove(cacheKey);
+            }
+            
+            // Now update the property with fresh lookup
+            UpdateProperty(property);
+            
+            // Update the field state after the update
+            UpdateFieldState(property, cacheKey);
+            
+            // Record the expected value if it was set by the system
+            if (property.objectReferenceValue != null) {
+                m_FieldStates[cacheKey] = FieldState.AutoAssigned;
+                m_ExpectedValues[cacheKey] = property.objectReferenceValue;
+            } else {
+                m_FieldStates[cacheKey] = FieldState.NotFound;
+            }
+        }
+
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label) {
             EditorGUI.BeginProperty(position, label, property);
 
             // turn off attribute if not active or in Play Mode (imitate as build will works)
             bool attachAttributeEnabled = AttachAttributesUtils.IsEnabled && !Application.isPlaying;
-            using (new EditorGUI.DisabledScope(!attachAttributeEnabled)) {
-                AttachAttributesUtils.DefaultPropertyGUI(position, property, label, true);
-                // Check if we should update based on domain reload or if property should be updated
-                if (attachAttributeEnabled && (ShouldUpdatePropertyAfterDomainReload(property) || ShouldUpdateProperty(property))) {
-                    // Mark that we've processed after domain reload
-                    if (s_AfterDomainReload && !s_HasProcessedAfterReload) {
-                        s_HasProcessedAfterReload = true;
-                    }
-                    
-                    // Defer expensive operations to avoid GUI event issues
-                    // Use EditorApplication.delayCall to avoid modifying properties during Layout event
-                    EditorApplication.delayCall += () => {
-                        // Must check if property is still valid before updating
-                        if (property != null && property.serializedObject != null) {
-                            property.serializedObject.Update(); // Ensure we have latest data
-                            UpdateProperty(property);
-                            property.serializedObject.ApplyModifiedProperties(); // Apply changes
-                        }
-                    };
-                }
+            
+            string cacheKey = GetCacheKey(property);
+            UpdateFieldState(property, cacheKey);
+            
+            FieldState currentState = m_FieldStates.ContainsKey(cacheKey) ? m_FieldStates[cacheKey] : FieldState.NotFound;
+            
+            Color originalColor = GUI.color;
+            switch (currentState) {
+                case FieldState.NotFound:
+                    GUI.color = m_GUIColorNull; // Red for not found
+                    break;
+                case FieldState.AutoAssigned:
+                    GUI.color = m_GUIColorAssigned; // Green for auto-assigned
+                    break;
+                case FieldState.UserAssigned:
+                    GUI.color = m_GUIColorUserAssigned; // Yellow for user-assigned
+                    break;
             }
 
+            var style = attachAttributeEnabled ? EditorStyles.boldLabel : EditorStyles.label;
+            
+            // Draw the property field with the determined style
+            AttachAttributesUtils.DefaultPropertyGUI(position, property, new GUIContent(label.text, label.tooltip), true);
+            var lastRect = GUILayoutUtility.GetLastRect();
+            if (lastRect.height > 0)
+            {
+                EditorGUI.LabelField(lastRect, label, style);
+            }
+            
+            // Check if we should update based on domain reload or if property should be updated
+            if (attachAttributeEnabled && ShouldUpdateProperty(property)) {
+                EditorApplication.delayCall += () => {
+                    if (property != null && property.serializedObject != null) {
+                        property.serializedObject.Update();
+                        UpdateProperty(property);
+
+                        if (property.objectReferenceValue != null) {
+                            m_FieldStates[cacheKey] = FieldState.AutoAssigned;
+                            m_ExpectedValues[cacheKey] = property.objectReferenceValue;
+                        } else {
+                            m_FieldStates[cacheKey] = FieldState.NotFound;
+                            if (m_ExpectedValues.ContainsKey(cacheKey)) {
+                                m_ExpectedValues.Remove(cacheKey);
+                            }
+                        }
+                        property.serializedObject.ApplyModifiedProperties();
+                    }
+                };
+            }
+
+            // Restore the original color
+            GUI.color = originalColor;
+
             EditorGUI.EndProperty();
+        }
+        
+        /// <summary>
+        /// Updates the field state based on current property value and expected value.
+        /// Detects user assignments.
+        /// </summary>
+        private void UpdateFieldState(SerializedProperty property, string cacheKey) {
+            // Only check for user override if we have an expected value
+            if (m_ExpectedValues.ContainsKey(cacheKey)) {
+                UnityEngine.Object expectedValue = m_ExpectedValues[cacheKey];
+                UnityEngine.Object currentValue = property.objectReferenceValue;
+                
+                // Use Unity's object comparison which handles destroyed objects properly
+                if (expectedValue != currentValue) {
+                    // User has changed the value, mark as UserAssigned
+                    m_FieldStates[cacheKey] = FieldState.UserAssigned;
+                    m_ExpectedValues.Remove(cacheKey); // Clear the expected value as it's been overridden
+                }
+                // If values match, state remains as previously set (could be AutoAssigned)
+            }
+            // If there's no expected value but the field has a value, determine appropriate state
+            else if (property.objectReferenceValue != null) {
+                // Only change state if it's currently NotFound (never been processed)
+                // Preserve existing AutoAssigned or UserAssigned states
+                if (!m_FieldStates.ContainsKey(cacheKey) || m_FieldStates[cacheKey] == FieldState.NotFound) {
+                    m_FieldStates[cacheKey] = FieldState.UserAssigned;
+                }
+                // If state is already AutoAssigned or UserAssigned, leave it unchanged
+            }
+            // If the field is null and we have no expected value, ensure state is NotFound
+            else {
+                m_FieldStates[cacheKey] = FieldState.NotFound;
+            }
         }
 
         /// Customize it for each attribute
@@ -479,19 +592,18 @@ namespace AttachAttributes {
 
         /// Can be customized per attribute
         public virtual bool ShouldUpdateProperty(SerializedProperty property) {
-            // Only update if the value is null and we haven't cached a failed lookup recently
-            string cacheKey = GetCacheKey(property);
+            if (s_AfterDomainReload) {
+                return true;
+            }
 
+            string cacheKey = GetCacheKey(property);
             if (m_FailedLookups.TryGetValue(cacheKey, out var cachedData)) {
-                // Check if enough time has passed to retry
                 if ((EditorApplication.timeSinceStartup - cachedData.timestamp) < k_RetryInterval) {
-                    return false; // Skip expensive operations if recently failed
+                    return false;
                 } else {
-                    // Remove the expired entry to allow retry
                     m_FailedLookups.Remove(cacheKey);
                 }
             }
-
             return property.objectReferenceValue == null;
         }
 
@@ -513,44 +625,20 @@ namespace AttachAttributes {
         }
 
         // Static variables to track domain reload state
-        private static bool s_AfterDomainReload = true; // Start with true to ensure initial update
-        private static bool s_HasProcessedAfterReload = false;
-
-        /// <summary>
-        /// Determines if property should update after domain reload (script changes)
-        /// </summary>
-        public virtual bool ShouldUpdatePropertyAfterDomainReload(SerializedProperty property) {
-            // Check if we're processing after domain reload and this hasn't been processed yet
-            if (s_AfterDomainReload && !s_HasProcessedAfterReload) {
-                return true;
-            }
-            return false;
-        }
+        private static bool s_AfterDomainReload = true;
 
         /// <summary>
         /// Resets the domain reload state for all instances
         /// </summary>
-        public static void ResetDomainReloadState() {
-            s_AfterDomainReload = true;
-            s_HasProcessedAfterReload = false;
-        }
 
         /// <summary>
         /// Handles the domain reload event to reset the state appropriately
         /// </summary>
-        [InitializeOnLoadMethod]
-        private static void SubscribeToDomainReload() {
-            // Use EditorApplication.update to periodically check if we're past the initial reload period
-            EditorApplication.update -= OnEditorUpdate;
-            EditorApplication.update += OnEditorUpdate;
-        }
-
-        private static void OnEditorUpdate() {
-            // After domain reload, we want to reset the flag after a short delay
-            // to ensure all editors have had a chance to update
-            if (s_AfterDomainReload && s_HasProcessedAfterReload) {
-                s_AfterDomainReload = false;
-            }
+        [DidReloadScripts]
+        private static void OnScriptsReloaded() {
+            s_AfterDomainReload = true;
+            ActiveEditorTracker.sharedTracker.ForceRebuild();
+            EditorApplication.delayCall += () => s_AfterDomainReload = false;
         }
     }
 
@@ -561,6 +649,11 @@ namespace AttachAttributes {
         public override void UpdateProperty(SerializedProperty property) {
             var type = property.GetComponentType();
             var go = property.GetGameObject();
+
+            // Check if the GameObject is part of a prefab asset
+            if (UnityEditor.PrefabUtility.IsPartOfPrefabAsset(go)) {
+                return; // Do nothing if it's a prefab asset
+            }
 
             property.objectReferenceValue = go.GetComponent(type);
         }
@@ -577,7 +670,7 @@ namespace AttachAttributes {
             GameObject targetObject = null;
             var targetName = labelAttribute.GameObjectName;
             if (string.IsNullOrEmpty(targetName)) {
-                targetName = AttachAttributesUtils.GetFieldName(property);                
+                targetName = AttachAttributesUtils.GetFieldName(property);
             }
             targetObject = AttachAttributesUtils.FindGameObjectByName(go, targetName, labelAttribute.IncludeInactive);
 
@@ -684,6 +777,11 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
+            // Check if the GameObject is part of a prefab asset
+            if (UnityEditor.PrefabUtility.IsPartOfPrefabAsset(go)) {
+                return; // Do nothing if it's a prefab asset
+            }
+
             var existingComponent = go.GetComponent(type);
             if (existingComponent != null) {
                 property.objectReferenceValue = existingComponent;
@@ -782,6 +880,11 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
+            // Check if the GameObject is part of a prefab asset
+            if (UnityEditor.PrefabUtility.IsPartOfPrefabAsset(go)) {
+                return; // Do nothing if it's a prefab asset
+            }
+
             AddComponentAtParentAttribute labelAttribute = (AddComponentAtParentAttribute)GetEffectiveAttribute();
 
             Transform parentTransform = go.transform.parent;
@@ -848,6 +951,11 @@ namespace AttachAttributes {
             var go = property.GetGameObject();
             if (go == null) return;
 
+            // Check if the GameObject is part of a prefab asset
+            if (UnityEditor.PrefabUtility.IsPartOfPrefabAsset(go)) {
+                return; // Do nothing if it's a prefab asset
+            }
+
             var labelAttribute = (GetComponentByPathAttribute)GetEffectiveAttribute();
 
             GameObject targetObject = TransformPathHelper.FindGameObjectByPath(go, labelAttribute.path);
@@ -868,6 +976,11 @@ namespace AttachAttributes {
             var type = property.GetComponentType();
             var go = property.GetGameObject();
             if (go == null) return;
+
+            // Check if the GameObject is part of a prefab asset
+            if (UnityEditor.PrefabUtility.IsPartOfPrefabAsset(go)) {
+                return; // Do nothing if it's a prefab asset
+            }
 
             var labelAttribute = (GetComponentsByPathAttribute)GetEffectiveAttribute();
 
